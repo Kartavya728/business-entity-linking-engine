@@ -1,0 +1,6 @@
+dataset/
+work/
+output/
+*.pdf
+__pycache__/
+*.zip
