@@ -119,10 +119,26 @@ def blocking_recall(cand: pl.DataFrame, gt: pl.DataFrame, s1_subset=None):
     return len(hit) / max(1, len(g))
 
 
+def prune(split: str, cap: int):
+    """Keep the top-`cap` fused candidates per S1 per source (full set kept as candidates_full)."""
+    d = split_dir(split)
+    full = d / "candidates_full.parquet"
+    if not full.exists():
+        (d / "candidates.parquet").rename(full)
+    c = pl.read_parquet(full).filter(pl.col("rrf_r") <= cap)
+    c.write_parquet(d / "candidates.parquet")
+    n1 = pl.read_parquet(d / "source1.parquet", columns=["idx"]).height
+    print(f"[cand] {split}: pruned to cap {cap}: {len(c):,} pairs ({len(c) / n1:.2f} per S1)")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--split", required=True)
     ap.add_argument("--enc", default=str(WORK_DIR / "biencoder"))
     ap.add_argument("--cap", type=int, default=DEFAULTS["cap"])
+    ap.add_argument("--prune", action="store_true", help="only re-cap existing candidates")
     a = ap.parse_args()
-    build_candidates(a.split, a.enc, {**DEFAULTS, "cap": a.cap})
+    if a.prune:
+        prune(a.split, a.cap)
+    else:
+        build_candidates(a.split, a.enc, {**DEFAULTS, "cap": a.cap})

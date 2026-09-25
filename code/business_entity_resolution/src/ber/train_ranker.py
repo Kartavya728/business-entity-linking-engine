@@ -1,6 +1,6 @@
 """Train the two-stage ranker on train features and tune the decision rule on OOF.
 
-Usage: python -m ber.train_ranker [--n-cv 4]
+Usage: python -m ber.train_ranker stage1|stage2 [--n-cv 4]
 Writes work/models/*, work/train/oof.parquet, work/models/decision.json
 """
 import argparse
@@ -13,6 +13,7 @@ import polars as pl
 
 from .config import split_dir
 from .decide import exclusive, score, select_expected_f, select_threshold
+from .features import group_context
 from .ranker import MODEL_DIR, feat_cols, fit_stage, stage2_context
 from .splits import ENC_FOLDS, s1_folds
 
@@ -33,7 +34,7 @@ def tune(oof: pl.DataFrame, gt: pl.DataFrame, universe: np.ndarray):
     return res[0]
 
 
-def main(n_cv: int):
+def load_train(n_cv: int):
     d = split_dir("train")
     t = time.time()
     df = pl.read_parquet(d / "features.parquet")
@@ -43,25 +44,50 @@ def main(n_cv: int):
     cv = np.where(np.isin(fold, ENC_FOLDS), -1, (fold - 3) % n_cv).astype(np.int8)
     df = df.with_columns(pl.Series("cv", cv))
     print(f"[train] features {df.shape} loaded in {time.time() - t:.0f}s; pos rate {df['y'].mean():.4f}", flush=True)
-    cols1 = feat_cols(df)
-    df = df.with_columns(pl.Series("p1", fit_stage(df, "stage1", cols1, n_cv)))
-    df = stage2_context(df, "p1")
+    return df, folds
+
+
+def stage1(n_cv: int):
+    """Fit stage 1 and write p1 for every train candidate (OOF on R, fold-average on E)."""
+    d = split_dir("train")
+    df, folds = load_train(n_cv)
+    df = df.with_columns(pl.Series("p1", fit_stage(df, "stage1", feat_cols(df), n_cv)))
+    df.select("s1_idx", "tgt", "tgt_idx", "y", "cv", "p1").write_parquet(d / "p1.parquet")
+    gt = pl.read_parquet(d / "gt.parquet")
+    universe = np.flatnonzero(~np.isin(folds, ENC_FOLDS))
+    print("[train] stage-1 decision grid:")
+    tune(df.filter(pl.col("cv") >= 0).select("s1_idx", "tgt", "tgt_idx", pl.col("p1").alias("p2")), gt, universe)
+
+
+def attach_stage2_inputs(df: pl.DataFrame, d) -> pl.DataFrame:
+    """Join p1 (+ cross-encoder score when available) and add p1 competition context."""
+    df = df.join(pl.read_parquet(d / "p1.parquet").select("s1_idx", "tgt", "tgt_idx", "p1"),
+                 on=["s1_idx", "tgt", "tgt_idx"], how="left")
+    if (d / "ce.parquet").exists():
+        df = df.join(pl.read_parquet(d / "ce.parquet"), on=["s1_idx", "tgt", "tgt_idx"], how="left")
+        df = group_context(df.with_columns(pl.col("ce").fill_null(-1.0)), "ce", "cectx")
+    return stage2_context(df, "p1")
+
+
+def stage2(n_cv: int):
+    d = split_dir("train")
+    df, folds = load_train(n_cv)
+    df = attach_stage2_inputs(df, d)
     cols2 = feat_cols(df) + ["p1"]
     df = df.with_columns(pl.Series("p2", fit_stage(df, "stage2", cols2, n_cv)))
     oof = df.select("s1_idx", "tgt", "tgt_idx", "y", "cv", "p1", "p2")
     oof.write_parquet(d / "oof.parquet")
     gt = pl.read_parquet(d / "gt.parquet")
     universe = np.flatnonzero(~np.isin(folds, ENC_FOLDS))
-    r = oof.filter(pl.col("cv") >= 0)
-    print("[train] stage-1 decision grid:")
-    tune(r.with_columns(pl.col("p1").alias("p2")), gt, universe)
     print("[train] stage-2 decision grid:")
-    best_s, best_c = tune(r, gt, universe)
+    best_s, best_c = tune(oof.filter(pl.col("cv") >= 0), gt, universe)
     json.dump(best_c, open(MODEL_DIR / "decision.json", "w"))
     print(f"[train] best OOF macro F0.5 = {best_s:.5f} with {best_c}", flush=True)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
+    ap.add_argument("stage", choices=["stage1", "stage2"])
     ap.add_argument("--n-cv", type=int, default=4)
-    main(ap.parse_args().n_cv)
+    a = ap.parse_args()
+    stage1(a.n_cv) if a.stage == "stage1" else stage2(a.n_cv)

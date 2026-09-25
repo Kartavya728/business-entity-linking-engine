@@ -31,37 +31,53 @@ def _strip0(t):
     return t if t else "0"
 
 
+def _fix(t, u):
+    """Number tokens agree up to a dropped leading/trailing digit(s)."""
+    return t == u or t.startswith(u) or u.startswith(t) or t.endswith(u) or u.endswith(t)
+
+
 def _num_feats(args):
-    """Number/zip agreement features for one pair (pure python, run in a pool)."""
+    """Number/zip agreement features for one pair (pure python, run in a pool).
+
+    Observed noise on true matches: zero padding (2610 -> 02610), dropped leading digit
+    (3890 -> 890), truncation (1914 -> 191), extra inserted numbers (Hn 359 B-8/15).
+    Distractors instead carry a different number (8326 vs 8315).
+    """
     n1, n2, z1, z2 = args
     a = [_strip0(t) for t in n1.split()]
     b = [_strip0(t) for t in n2.split()]
     sa, sb = set(a), set(b)
     inter = len(sa & sb)
     jac = inter / len(sa | sb) if (sa or sb) else -1.0
-    # house number = first number that is not the zip
-    ha = next((t for t in a if t != _strip0(z1)), "") if a else ""
-    hb = next((t for t in b if t != _strip0(z2)), "") if b else ""
+    za, zb = _strip0(z1) if z1 else "", _strip0(z2) if z2 else ""
+    ha = [t for t in a if t != za]; hb = [t for t in b if t != zb]
     if ha and hb:
-        h_eq = 1.0 if ha == hb else 0.0
-        h_pre = 1.0 if (ha.startswith(hb) or hb.startswith(ha)) else 0.0
-        h_in = 1.0 if (ha in sb or hb in sa) else 0.0
-        h_lev = float(Levenshtein.distance(ha, hb))
+        h1, h2 = ha[0], hb[0]
+        h_eq = float(h1 == h2)
+        h_pre = float(h1.startswith(h2) or h2.startswith(h1))
+        h_suf = float(h1.endswith(h2) or h2.endswith(h1))
+        h_in = float(h1 in sb or h2 in sa)
+        h_lev = float(Levenshtein.distance(h1, h2))
+        # best agreement of any S1 house-ish number with any target number
+        h_any = float(any(t == u for t in ha for u in hb))
+        h_anyfix = float(any(_fix(t, u) for t in ha for u in hb))
+        big = [t for t in ha if len(t) >= 3]
+        h_big_miss = float(sum(1 for t in big if not any(_fix(t, u) for u in hb))) if big else -1.0
     else:
-        h_eq = h_pre = h_in = h_lev = -1.0
-    # numbers of S1 absent from the target and vice versa (with prefix tolerance)
-    miss_a = sum(1 for t in sa if not any(u.startswith(t) or t.startswith(u) for u in sb)) if sb else -1
-    miss_b = sum(1 for t in sb if not any(u.startswith(t) or t.startswith(u) for u in sa)) if sa else -1
+        h_eq = h_pre = h_suf = h_in = h_lev = h_any = h_anyfix = h_big_miss = -1.0
+    miss_a = sum(1 for t in sa if not any(_fix(t, u) for u in sb)) if sb else -1
+    miss_b = sum(1 for t in sb if not any(_fix(t, u) for u in sa)) if sa else -1
     if z1 and z2:
-        z_eq = 1.0 if z1 == z2 else 0.0
-        z_p3 = 1.0 if z1[:3] == z2[:3] else 0.0
+        z_eq = float(z1 == z2)
+        z_p3 = float(z1[:3] == z2[:3])
     else:
         z_eq = z_p3 = -1.0
-    return (jac, inter, len(sa), len(sb), h_eq, h_pre, h_in, h_lev, miss_a, miss_b, z_eq, z_p3)
+    return (jac, inter, len(sa), len(sb), h_eq, h_pre, h_suf, h_in, h_lev, h_any, h_anyfix, h_big_miss,
+            miss_a, miss_b, z_eq, z_p3)
 
 
-NUM_NAMES = ["num_jac", "num_inter", "num_n1", "num_n2", "hno_eq", "hno_prefix", "hno_in",
-             "hno_lev", "num_miss1", "num_miss2", "zip_eq", "zip_p3"]
+NUM_NAMES = ["num_jac", "num_inter", "num_n1", "num_n2", "hno_eq", "hno_prefix", "hno_suffix", "hno_in",
+             "hno_lev", "hno_any", "hno_anyfix", "hno_big_miss", "num_miss1", "num_miss2", "zip_eq", "zip_p3"]
 
 
 def _fit_one(key, col_an_kw, t1, t2):
