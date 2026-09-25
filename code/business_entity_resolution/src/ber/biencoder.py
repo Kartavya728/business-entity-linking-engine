@@ -54,7 +54,8 @@ class BiEncoder(torch.nn.Module):
 
 
 def train_biencoder(anchors, positives, out_path, epochs: int = 1, batch_size: int = 512,
-                    lr: float = 5e-5, temp: float = 0.05, hard_negs=None, seed: int = 42):
+                    lr: float = 5e-5, temp: float = 0.05, hard_negs=None, seed: int = 42,
+                    init: str = BASE_MODEL):
     """Fine-tune with symmetric InfoNCE over in-batch negatives.
 
     anchors/positives: aligned lists of texts. hard_negs: optional aligned list of texts
@@ -62,7 +63,7 @@ def train_biencoder(anchors, positives, out_path, epochs: int = 1, batch_size: i
     """
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
-    model = BiEncoder().cuda().train()
+    model = BiEncoder(init).cuda().train()
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     n = len(anchors)
     steps = epochs * (n // batch_size)

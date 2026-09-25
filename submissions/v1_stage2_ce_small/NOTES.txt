@@ -1,0 +1,4 @@
+v1 2026-09-26 04:26 IST
+OOF macro F0.5 (500K train S1): 0.98837 (stage1 0.98371)
+blocking: e5-small bi-encoder v2 (hard neg), cap 20/source, 40.83 cand/S1
+matcher: stage1 XGB + CE e5-small + stage2 XGB; decision ef floor .5 excl

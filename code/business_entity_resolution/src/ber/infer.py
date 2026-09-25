@@ -1,7 +1,7 @@
 """Test-time inference: features -> stage 1 -> cross-encoder -> stage 2 -> decision -> TSVs.
 
 Usage: python -m ber.infer [--skip-ce]
-Assumes `ber.prepare --split test` and `ber.candidates --split test` have been run.
+Assumes prepare, candidates and `build_features score --split test` (p1) have been run.
 Writes output/matching_results.tsv and output/candidate_pairs.tsv.
 """
 import argparse
@@ -14,7 +14,7 @@ from .config import OUT_DIR, split_dir
 from .decide import exclusive, select_expected_f, select_threshold
 from .io import write_id_lists
 from .ranker import MODEL_DIR, predict_stage
-from .train_ranker import attach_stage2_inputs
+from .train_ranker import stage2_frame
 
 
 def id_lists(df: pl.DataFrame, s1_n: int, tgt_ids: dict, order_col: str):
@@ -35,23 +35,20 @@ def decide(df: pl.DataFrame, cfg: dict) -> pl.DataFrame:
 
 def main(skip_ce: bool):
     d = split_dir("test")
-    feat = pl.read_parquet(d / "features.parquet")
-    feat = feat.with_columns(pl.Series("p1", predict_stage(feat, "stage1")))
-    feat.select("s1_idx", "tgt", "tgt_idx", "p1").write_parquet(d / "p1.parquet")
     if not skip_ce:
         from .train_ce import score
         score("test")
-    feat = attach_stage2_inputs(feat.drop("p1"), d)
+    feat = stage2_frame("test")
     feat = feat.with_columns(pl.Series("p2", predict_stage(feat, "stage2")))
-    feat.select("s1_idx", "tgt", "tgt_idx", "p1", "p2").write_parquet(d / "p2.parquet")
+    feat.select("s1_idx", "tgt", "tgt_idx", "p1", "p2").filter(pl.col("p2") > 0.01).write_parquet(d / "p2.parquet")
     cfg = json.load(open(MODEL_DIR / "decision.json"))
     sel = decide(feat.select("s1_idx", "tgt", "tgt_idx", "p2"), cfg)
 
     s1_ids = pl.read_parquet(d / "source1.parquet", columns=["entity_id"])["entity_id"].to_numpy()
     tgt_ids = {k: pl.read_parquet(d / f"source{k}.parquet", columns=["entity_id"])["entity_id"].to_numpy()
                for k in (2, 3)}
-    cand = pl.read_parquet(d / "candidates.parquet", columns=["s1_idx", "tgt", "tgt_idx", "rrf"])
-    write_id_lists(OUT_DIR / "candidate_pairs.tsv", s1_ids, id_lists(cand, len(s1_ids), tgt_ids, "rrf"),
+    cand = pl.read_parquet(d / "candidates.parquet", columns=["s1_idx", "tgt", "tgt_idx", "dense_s"])
+    write_id_lists(OUT_DIR / "candidate_pairs.tsv", s1_ids, id_lists(cand, len(s1_ids), tgt_ids, "dense_s"),
                    ("source1_entity_id", "candidate_entity_ids"))
     write_id_lists(OUT_DIR / "matching_results.tsv", s1_ids, id_lists(sel, len(s1_ids), tgt_ids, "p2"),
                    ("source1_entity_id", "matched_entity_ids"))

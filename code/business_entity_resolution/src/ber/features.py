@@ -221,15 +221,41 @@ def name_freq(s1: pl.DataFrame, tg: pl.DataFrame):
             r2.sort("idx")["f2"].to_numpy().astype(np.float32))
 
 
+def grp_stats(g: np.ndarray, x: np.ndarray):
+    """Per-group statistics of x via one lexsort (fast for ~1e8 rows / ~1e7 groups).
+
+    Returns per-row arrays: group max, 1-based descending rank, group size, and the
+    second-largest value in the group (0 when the group has a single row).
+    """
+    n = len(x)
+    order = np.lexsort((-x, g))
+    gs = g[order]; xs = x[order]
+    starts = np.flatnonzero(np.r_[True, gs[1:] != gs[:-1]])
+    sizes = np.diff(np.r_[starts, n])
+    gi = np.repeat(np.arange(len(starts)), sizes)
+    gmax = xs[starts]
+    second = np.where(sizes > 1, xs[np.minimum(starts + 1, n - 1)], 0).astype(np.float32)
+    out = {}
+    for name, v in (("max", gmax[gi]), ("rank", (np.arange(n) - starts[gi] + 1).astype(np.float32)),
+                    ("n", sizes[gi].astype(np.float32)), ("second", second[gi])):
+        r = np.empty(n, dtype=np.float32); r[order] = v; out[name] = r
+    return out
+
+
+def _keys(df: pl.DataFrame):
+    s1 = df["s1_idx"].to_numpy().astype(np.int64); t = df["tgt"].to_numpy().astype(np.int64)
+    ti = df["tgt_idx"].to_numpy().astype(np.int64)
+    return s1 * 4 + t, ti * 4 + t
+
+
 def group_context(df: pl.DataFrame, score: str, prefix: str) -> pl.DataFrame:
     """Competition features for a pair score within (S1, source) and within target."""
+    gs, gt = _keys(df)
+    x = df[score].to_numpy().astype(np.float32)
+    a = grp_stats(gs, x); b = grp_stats(gt, x)
     return df.with_columns(
-        pl.col(score).max().over(["s1_idx", "tgt"]).alias(f"{prefix}_s1max"),
-        (pl.col(score) - pl.col(score).max().over(["s1_idx", "tgt"])).alias(f"{prefix}_s1gap"),
-        pl.col(score).rank("ordinal", descending=True).over(["s1_idx", "tgt"]).cast(pl.Float32).alias(f"{prefix}_s1rank"),
-        pl.len().over(["s1_idx", "tgt"]).cast(pl.Float32).alias(f"{prefix}_s1n"),
-        pl.col(score).max().over(["tgt", "tgt_idx"]).alias(f"{prefix}_tmax"),
-        (pl.col(score) - pl.col(score).max().over(["tgt", "tgt_idx"])).alias(f"{prefix}_tgap"),
-        pl.col(score).rank("ordinal", descending=True).over(["tgt", "tgt_idx"]).cast(pl.Float32).alias(f"{prefix}_trank"),
-        pl.len().over(["tgt", "tgt_idx"]).cast(pl.Float32).alias(f"{prefix}_tn"),
+        pl.Series(f"{prefix}_s1max", a["max"]), pl.Series(f"{prefix}_s1gap", x - a["max"]),
+        pl.Series(f"{prefix}_s1rank", a["rank"]), pl.Series(f"{prefix}_s1n", a["n"]),
+        pl.Series(f"{prefix}_tmax", b["max"]), pl.Series(f"{prefix}_tgap", x - b["max"]),
+        pl.Series(f"{prefix}_trank", b["rank"]), pl.Series(f"{prefix}_tn", b["n"]),
     )

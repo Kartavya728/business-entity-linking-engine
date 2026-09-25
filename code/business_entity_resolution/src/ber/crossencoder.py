@@ -58,10 +58,10 @@ class CrossEncoder(torch.nn.Module):
 
 
 def train_crossencoder(a, b, y, out_path, epochs: int = 1, batch_size: int = 256, lr: float = 3e-5,
-                       seed: int = 42):
+                       seed: int = 42, base: str = CE_BASE):
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
-    model = CrossEncoder().cuda().train()
+    model = CrossEncoder(base).cuda().train()
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     n = len(a); steps = epochs * (n // batch_size); warm = max(1, int(0.05 * steps))
     sched = torch.optim.lr_scheduler.LambdaLR(

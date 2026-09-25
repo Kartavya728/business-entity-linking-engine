@@ -16,8 +16,10 @@ from .metric import f05
 
 def exclusive(df: pl.DataFrame, p: str = "p2") -> pl.DataFrame:
     """Keep only each target's highest-probability claimant."""
-    r = pl.col(p).rank("ordinal", descending=True).over(["tgt", "tgt_idx"])
-    return df.filter(r == 1)
+    from .features import _keys, grp_stats
+    _, gt = _keys(df)
+    r = grp_stats(gt, df[p].to_numpy().astype(np.float32))["rank"]
+    return df.filter(pl.Series(r == 1))
 
 
 def select_expected_f(df: pl.DataFrame, p: str = "p2", floor: float = 0.3, miss: float = 0.0,

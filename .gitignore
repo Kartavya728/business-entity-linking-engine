@@ -4,3 +4,4 @@ output/
 *.pdf
 __pycache__/
 *.zip
+submissions/*/matching_results.tsv

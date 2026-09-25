@@ -1,7 +1,10 @@
-"""Train the two-stage ranker on train features and tune the decision rule on OOF.
+"""Train the two-stage ranker and tune the decision rule on out-of-fold predictions.
 
-Usage: python -m ber.train_ranker stage1|stage2 [--n-cv 4]
-Writes work/models/*, work/train/oof.parquet, work/models/decision.json
+  python -m ber.train_ranker stage1   # full pair features of the training subset
+  python -m ber.train_ranker stage2   # p1 + competition context + CE + compact features
+Stage 2 context is computed over *all* train candidates (p1.parquet from the streaming
+pass), so every pair sees its true competitors. Training/evaluation rows are the subset
+S1 entities (random 500K of the ranker folds); OOF predictions give the validation score.
 """
 import argparse
 import itertools
@@ -14,73 +17,69 @@ import polars as pl
 from .config import split_dir
 from .decide import exclusive, score, select_expected_f, select_threshold
 from .features import group_context
-from .ranker import MODEL_DIR, feat_cols, fit_stage, stage2_context
-from .splits import ENC_FOLDS, s1_folds
+from .ranker import MODEL_DIR, feat_cols, fit_stage, stage2_context, subset_cv
+
+N_CV = 4
 
 
-def tune(oof: pl.DataFrame, gt: pl.DataFrame, universe: np.ndarray):
-    """Grid over decision rules; returns best config and its macro F0.5."""
+def tune(oof: pl.DataFrame, gt: pl.DataFrame, universe: np.ndarray, p: str = "p2"):
+    """Grid over decision rules; returns (best score, config)."""
+    oof = oof.rename({p: "p2"}) if p != "p2" else oof
     res = []
     for excl in (False, True):
         d = exclusive(oof) if excl else oof
-        for t in (0.3, 0.4, 0.5, 0.6, 0.7):
+        for t in (0.4, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95):
             res.append((score(select_threshold(d, t=t), gt, universe), dict(rule="thr", excl=excl, t=t)))
-        for floor, eb in itertools.product((0.05, 0.1, 0.2, 0.3), (0.8, 1.0, 1.2)):
+        for floor, eb in itertools.product((0.3, 0.4, 0.5, 0.6), (1.0, 1.3, 1.6)):
             s = score(select_expected_f(d, floor=floor, empty_bias=eb), gt, universe)
             res.append((s, dict(rule="ef", excl=excl, floor=floor, empty_bias=eb)))
     res.sort(key=lambda r: -r[0])
-    for s, c in res[:8]:
-        print(f"  {s:.5f} {c}")
+    for s, c in res[:6]:
+        print(f"  {s:.5f} {c}", flush=True)
     return res[0]
 
 
-def load_train(n_cv: int):
+def stage1():
     d = split_dir("train")
     t = time.time()
     df = pl.read_parquet(d / "features.parquet")
-    n_s1 = pl.read_parquet(d / "source1.parquet", columns=["idx"]).height
-    folds = s1_folds(n_s1)
-    fold = folds[df["s1_idx"].to_numpy()]
-    cv = np.where(np.isin(fold, ENC_FOLDS), -1, (fold - 3) % n_cv).astype(np.int8)
-    df = df.with_columns(pl.Series("cv", cv))
-    print(f"[train] features {df.shape} loaded in {time.time() - t:.0f}s; pos rate {df['y'].mean():.4f}", flush=True)
-    return df, folds
-
-
-def stage1(n_cv: int):
-    """Fit stage 1 and write p1 for every train candidate (OOF on R, fold-average on E)."""
-    d = split_dir("train")
-    df, folds = load_train(n_cv)
-    df = df.with_columns(pl.Series("p1", fit_stage(df, "stage1", feat_cols(df), n_cv)))
-    df.select("s1_idx", "tgt", "tgt_idx", "y", "cv", "p1").write_parquet(d / "p1.parquet")
+    df = df.with_columns(pl.Series("cv", subset_cv(df["s1_idx"].to_numpy(), d, N_CV)))
+    print(f"[train] stage-1 features {df.shape} in {time.time() - t:.0f}s; pos rate {df['y'].mean():.4f}", flush=True)
+    df = df.with_columns(pl.Series("p1", fit_stage(df, "stage1", feat_cols(df), N_CV)))
     gt = pl.read_parquet(d / "gt.parquet")
-    universe = np.flatnonzero(~np.isin(folds, ENC_FOLDS))
-    print("[train] stage-1 decision grid:")
-    tune(df.filter(pl.col("cv") >= 0).select("s1_idx", "tgt", "tgt_idx", pl.col("p1").alias("p2")), gt, universe)
+    universe = np.load(d / "subset_s1.npy")
+    print("[train] stage-1 OOF decision grid:")
+    tune(df.select("s1_idx", "tgt", "tgt_idx", "p1"), gt, universe, p="p1")
 
 
-def attach_stage2_inputs(df: pl.DataFrame, d) -> pl.DataFrame:
-    """Join p1 (+ cross-encoder score when available) and add p1 competition context."""
-    df = df.join(pl.read_parquet(d / "p1.parquet").select("s1_idx", "tgt", "tgt_idx", "p1"),
-                 on=["s1_idx", "tgt", "tgt_idx"], how="left")
-    if (d / "ce.parquet").exists():
-        df = df.join(pl.read_parquet(d / "ce.parquet"), on=["s1_idx", "tgt", "tgt_idx"], how="left")
-        df = group_context(df.with_columns(pl.col("ce").fill_null(-1.0)), "ce", "cectx")
+def stage2_frame(split: str) -> pl.DataFrame:
+    """p1 table (+ CE) with competition context over all candidates of the split."""
+    d = split_dir(split)
+    df = pl.read_parquet(d / "p1.parquet")
+    for fname, col, pref in (("ce.parquet", "ce", "cectx"), ("ce_b.parquet", "ceb", "cebctx")):
+        if (d / fname).exists():
+            df = df.join(pl.read_parquet(d / fname), on=["s1_idx", "tgt", "tgt_idx"], how="left")
+            df = group_context(df.with_columns(pl.col(col).fill_null(-1.0)), col, pref)
     return stage2_context(df, "p1")
 
 
-def stage2(n_cv: int):
+def stage2():
     d = split_dir("train")
-    df, folds = load_train(n_cv)
-    df = attach_stage2_inputs(df, d)
+    t = time.time()
+    df = stage2_frame("train")
+    df = df.with_columns(pl.Series("cv", subset_cv(df["s1_idx"].to_numpy(), d, N_CV))).filter(pl.col("cv") >= 0)
+    gt = pl.read_parquet(d / "gt.parquet").with_columns(pl.lit(1, pl.Int8).alias("y"))
+    df = df.join(gt, on=["s1_idx", "tgt", "tgt_idx"], how="left").with_columns(pl.col("y").fill_null(0))
+    print(f"[train] stage-2 frame {df.shape} in {time.time() - t:.0f}s", flush=True)
     cols2 = feat_cols(df) + ["p1"]
-    df = df.with_columns(pl.Series("p2", fit_stage(df, "stage2", cols2, n_cv)))
-    oof = df.select("s1_idx", "tgt", "tgt_idx", "y", "cv", "p1", "p2")
-    oof.write_parquet(d / "oof.parquet")
-    gt = pl.read_parquet(d / "gt.parquet")
-    universe = np.flatnonzero(~np.isin(folds, ENC_FOLDS))
-    print("[train] stage-2 decision grid:")
-    best_s, best_c = tune(oof.filter(pl.col("cv") >= 0), gt, universe)
+    df = df.with_columns(pl.Series("p2", fit_stage(df, "stage2", cols2, N_CV)))
+    df.select("s1_idx", "tgt", "tgt_idx", "y", "cv", "p1", "p2").write_parquet(d / "oof.parquet")
+    universe = np.load(d / "subset_s1.npy")
+    gt = gt.drop("y")
+    print("[train] stage-1 (p1) OOF on full context rows:")
+    tune(df.select("s1_idx", "tgt", "tgt_idx", "p1"), gt, universe, p="p1")
+    print("[train] stage-2 OOF decision grid:")
+    best_s, best_c = tune(df.select("s1_idx", "tgt", "tgt_idx", "p2"), gt, universe)
     json.dump(best_c, open(MODEL_DIR / "decision.json", "w"))
     print(f"[train] best OOF macro F0.5 = {best_s:.5f} with {best_c}", flush=True)
 
@@ -88,6 +87,5 @@ def stage2(n_cv: int):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("stage", choices=["stage1", "stage2"])
-    ap.add_argument("--n-cv", type=int, default=4)
     a = ap.parse_args()
-    stage1(a.n_cv) if a.stage == "stage1" else stage2(a.n_cv)
+    stage1() if a.stage == "stage1" else stage2()
