@@ -1,0 +1,1 @@
+v2 for US/India; France = stage-1 p1, exclusive, threshold 0.75 (no cross-encoder)

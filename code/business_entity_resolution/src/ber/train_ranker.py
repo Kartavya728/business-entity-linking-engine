@@ -17,7 +17,9 @@ import polars as pl
 from .config import split_dir
 from .decide import exclusive, score, select_expected_f, select_threshold
 from .features import group_context
-from .ranker import MODEL_DIR, feat_cols, fit_stage, stage2_context, subset_cv
+import os
+
+from .ranker import MODEL_DIR, feat_cols, fit_stage, fit_stage_lgb, stage2_context, subset_cv
 
 N_CV = 4
 
@@ -56,7 +58,8 @@ def stage2_frame(split: str) -> pl.DataFrame:
     """p1 table (+ CE) with competition context over all candidates of the split."""
     d = split_dir(split)
     df = pl.read_parquet(d / "p1.parquet")
-    for fname, col, pref in (("ce.parquet", "ce", "cectx"), ("ce_b.parquet", "ceb", "cebctx")):
+    for fname, col, pref in (("ce.parquet", "ce", "cectx"), ("ce_b.parquet", "ceb", "cebctx"),
+                             ("ce_b2.parquet", "ceb2", "ceb2ctx"), ("ce_c.parquet", "cec", "cecctx")):
         if (d / fname).exists():
             df = df.join(pl.read_parquet(d / fname), on=["s1_idx", "tgt", "tgt_idx"], how="left")
             df = group_context(df.with_columns(pl.col(col).fill_null(-1.0)), col, pref)
@@ -72,14 +75,24 @@ def stage2():
     df = df.join(gt, on=["s1_idx", "tgt", "tgt_idx"], how="left").with_columns(pl.col("y").fill_null(0))
     print(f"[train] stage-2 frame {df.shape} in {time.time() - t:.0f}s", flush=True)
     cols2 = feat_cols(df) + ["p1"]
-    df = df.with_columns(pl.Series("p2", fit_stage(df, "stage2", cols2, N_CV)))
-    df.select("s1_idx", "tgt", "tgt_idx", "y", "cv", "p1", "p2").write_parquet(d / "oof.parquet")
+    px = fit_stage(df, "stage2", cols2, N_CV)
+    cands = {"xgb": px}
+    if os.environ.get("BER_LGB") == "1":
+        pl_ = fit_stage_lgb(df, "stage2lgb", cols2, N_CV)
+        cands["lgb"] = pl_
+        cands["avg"] = 0.5 * (px + pl_)
     universe = np.load(d / "subset_s1.npy")
     gt = gt.drop("y")
     print("[train] stage-1 (p1) OOF on full context rows:")
     tune(df.select("s1_idx", "tgt", "tgt_idx", "p1"), gt, universe, p="p1")
-    print("[train] stage-2 OOF decision grid:")
-    best_s, best_c = tune(df.select("s1_idx", "tgt", "tgt_idx", "p2"), gt, universe)
+    best = None
+    for blend, pv in cands.items():
+        print(f"[train] stage-2 OOF decision grid ({blend}):")
+        s_, c_ = tune(df.select("s1_idx", "tgt", "tgt_idx").with_columns(pl.Series("p2", pv)), gt, universe)
+        if best is None or s_ > best[0]:
+            best = (s_, {**c_, "blend": blend}, pv)
+    best_s, best_c, pbest = best
+    df.select("s1_idx", "tgt", "tgt_idx", "y", "cv", "p1").with_columns(pl.Series("p2", pbest)).write_parquet(d / "oof.parquet")
     json.dump(best_c, open(MODEL_DIR / "decision.json", "w"))
     print(f"[train] best OOF macro F0.5 = {best_s:.5f} with {best_c}", flush=True)
 

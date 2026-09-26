@@ -1,0 +1,4 @@
+v2 2026-09-26 05:50 IST
+OOF macro F0.5 (500K train S1): 0.98964 (v1 0.98837)
+change: + e5-base cross-encoder score as stage-2 feature
+decision: ef floor .3 empty_bias 1.6 excl

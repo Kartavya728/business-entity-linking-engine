@@ -1,7 +1,11 @@
 dataset/
 work/
-output/
 *.pdf
 __pycache__/
 *.zip
+# large generated files (GitHub rejects files > 100 MB); they go into the final zip, not git
+output/
 submissions/*/matching_results.tsv
+*.parquet
+*.safetensors
+*.pt

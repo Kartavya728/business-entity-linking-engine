@@ -17,17 +17,20 @@ from .features import TfidfBank, group_context, name_freq, pair_features
 from .splits import ENC_FOLDS, s1_folds
 
 CHUNK = 5_000_000
-SUBSET_S1 = 500_000
+SUBSET_S1 = 800_000
 # compact pair features carried into stage 2 (besides p1 / context / CE)
 KEEP = ["dense_s", "dense_r2", "rdense_r", "n_tset", "n_ratio", "nk_ratio", "a_tset", "a_ratio",
         "n_idf", "a_idf", "n_c3", "a_c3", "hno_big_miss", "hno_anyfix", "zip_eq", "leg_conflict",
-        "leg_eq", "a_empty2", "nfreq1", "nfreq2", "num_miss1", "num_miss2", "nns_ratio"]
+        "leg_eq", "a_empty2", "nfreq1", "nfreq2", "num_miss1", "num_miss2", "nns_ratio",
+        "nx_tset", "nx_ratio", "nx_idf", "nx_miss1", "nx_miss2", "nxk_exact"]
 
 
 def load_candidates(split: str) -> pl.DataFrame:
     d = split_dir(split)
     cand = pl.read_parquet(d / "candidates.parquet")
     cand = group_context(cand, "dense_s", "dctx")
+    if "sparse_s" in cand.columns:  # v5 hybrid blocking: IDF-score competition context too
+        cand = group_context(cand, "sparse_s", "sctx")
     return cand.with_columns(pl.col(pl.Float64).cast(pl.Float32))
 
 
@@ -85,7 +88,8 @@ def score(split: str):
     for f in feature_chunks(split, cand):
         # train: subset rows get their out-of-fold p1, all others the fold-average
         p1 = predict_stage_oof(f, "stage1", d) if split == "train" else predict_stage(f, "stage1")
-        keep = [c for c in f.columns if c.startswith("dctx_")] + KEEP
+        keep = [c for c in f.columns if c.startswith(("dctx_", "sctx_"))] + KEEP + \
+            [c for c in ("sparse_s", "sparse_r2") if c in f.columns]
         parts.append(f.select(["s1_idx", "tgt", "tgt_idx"] + keep).with_columns(pl.Series("p1", p1)))
     out = pl.concat(parts)
     out.write_parquet(d / "p1.parquet", compression="zstd")

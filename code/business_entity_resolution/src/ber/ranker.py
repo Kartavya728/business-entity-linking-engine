@@ -142,3 +142,45 @@ def predict_stage_oof(df: pl.DataFrame, name: str, d) -> np.ndarray:
         out[cv == k] = p[cv == k]
         out[avg] += p[avg] / n_cv
     return out
+
+
+LGB_PARAMS = dict(objective="binary", learning_rate=0.05, num_leaves=255, min_data_in_leaf=100,
+                  feature_fraction=0.7, bagging_fraction=0.8, bagging_freq=1, lambda_l2=2.0,
+                  max_bin=255, num_threads=40, verbose=-1)
+
+
+def fit_stage_lgb(df: pl.DataFrame, name: str, cols, n_cv: int, rounds: int = 3000):
+    """LightGBM (MIT) counterpart of fit_stage, used as a second model family in the ensemble."""
+    import lightgbm as lgb
+    cv = df["cv"].to_numpy(); y = df["y"].to_numpy().astype(np.float32)
+    X = to_x(df, cols)
+    pred = np.zeros(len(df), dtype=np.float32)
+    for k in range(n_cv):
+        tr = (cv >= 0) & (cv != k); va = cv == k
+        path = MODEL_DIR / f"{name}_cv{k}.txt"
+        if path.exists():
+            m = lgb.Booster(model_file=str(path))
+        else:
+            dtr = lgb.Dataset(X[tr], y[tr], free_raw_data=True)
+            dva = lgb.Dataset(X[va], y[va], reference=dtr)
+            m = lgb.train(LGB_PARAMS, dtr, rounds, valid_sets=[dva],
+                          callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(500)])
+            m.save_model(str(path), num_iteration=m.best_iteration)
+            print(f"[ranker] {name} fold {k}: best_it {m.best_iteration} "
+                  f"logloss {m.best_score['valid_0']['binary_logloss']:.5f}", flush=True)
+        pred[va] = m.predict(X[va])
+        del m
+        gc.collect()
+    json.dump({"cols": cols, "n_cv": n_cv, "kind": "lgb"}, open(MODEL_DIR / f"{name}_meta.json", "w"))
+    return pred
+
+
+def predict_stage_lgb(df: pl.DataFrame, name: str, chunk: int = 5_000_000) -> np.ndarray:
+    import lightgbm as lgb
+    meta = json.load(open(MODEL_DIR / f"{name}_meta.json"))
+    models = [lgb.Booster(model_file=str(MODEL_DIR / f"{name}_cv{k}.txt")) for k in range(meta["n_cv"])]
+    out = np.zeros(len(df), dtype=np.float32)
+    for s in range(0, len(df), chunk):
+        X = to_x(df.slice(s, chunk), meta["cols"])
+        out[s:s + chunk] = sum(m.predict(X, num_threads=40) for m in models) / len(models)
+    return out

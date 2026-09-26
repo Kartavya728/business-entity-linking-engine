@@ -9,13 +9,15 @@ import polars as pl
 
 from .config import split_dir
 from .io import load_ground_truth, load_source
+from .admin_areas import canon_admin
+from .fillers import apply_fillers, filler_sets
 from .normalize import base, normalize_frame
 
 
 def enc_text(df: pl.DataFrame) -> pl.DataFrame:
     """Text fed to the neural encoders: ASCII-folded 'name | address'."""
     names = [base(x) for x in df["business_name"].to_list()]
-    addrs = [base(x) for x in df["business_address"].to_list()]
+    addrs = [base(canon_admin(x)) for x in df["business_address"].to_list()]
     return df.with_columns(pl.Series("text", [f"{n} | {a}" for n, a in zip(names, addrs)]))
 
 
@@ -27,9 +29,12 @@ def prepare(split: str):
         df = load_source(split, src)
         df = normalize_frame(df)
         df = enc_text(df)
-        df.write_parquet(out / f"{src}.parquet")
         frames[src] = df
         print(f"[prepare] {split}/{src}: {len(df):,} rows in {time.time() - t:.0f}s", flush=True)
+    fill = filler_sets(frames)
+    for src in ("source1", "source2", "source3"):
+        frames[src] = apply_fillers(frames[src], fill)
+        frames[src].write_parquet(out / f"{src}.parquet")
     if split == "train":
         gt = load_ground_truth(frames["source1"], frames["source2"], frames["source3"])
         gt.write_parquet(out / "gt.parquet")

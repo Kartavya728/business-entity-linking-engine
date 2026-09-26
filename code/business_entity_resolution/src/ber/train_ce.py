@@ -18,14 +18,18 @@ CE_PATH = WORK_DIR / "crossencoder"
 CE_MODELS = {
     "small": ("intfloat/multilingual-e5-small", WORK_DIR / "crossencoder", "ce", "ce.parquet"),
     "base": ("intfloat/multilingual-e5-base", WORK_DIR / "crossencoder_base", "ceb", "ce_b.parquet"),
+    "base2": ("intfloat/multilingual-e5-base", WORK_DIR / "crossencoder_base2", "ceb2", "ce_b2.parquet"),
+    # canonical text (filler-free name + legal form + normalised address), see fillers.py
+    "canon": ("intfloat/multilingual-e5-small", WORK_DIR / "crossencoder_canon", "cec", "ce_c.parquet"),
 }
+TEXT_COL = {"canon": "ctext"}
 CE_MIN_P1 = 0.003
 HARD_RANK = 12  # negatives: candidates within this fused rank
 
 
-def _texts(split):
+def _texts(split, col="text"):
     d = split_dir(split)
-    return {k: pl.read_parquet(d / f"source{k}.parquet", columns=["text"])["text"].to_list() for k in (1, 2, 3)}
+    return {k: pl.read_parquet(d / f"source{k}.parquet", columns=[col])[col].to_list() for k in (1, 2, 3)}
 
 
 def train(n_s1: int, model: str = "small", seed: int = 0):
@@ -39,11 +43,11 @@ def train(n_s1: int, model: str = "small", seed: int = 0):
     c = c.join(gt, on=["s1_idx", "tgt", "tgt_idx"], how="left").with_columns(pl.col("y").fill_null(0))
     c = c.filter((pl.col("y") == 1) | (pl.col("dense_r2") < HARD_RANK))
     print(f"[ce] {len(c):,} training pairs, pos rate {c['y'].mean():.3f}", flush=True)
-    T = _texts("train")
+    T = _texts("train", TEXT_COL.get(model, "text"))
     a = [T[1][i] for i in c["s1_idx"].to_list()]
     b = [T[k][j] for k, j in zip(c["tgt"].to_list(), c["tgt_idx"].to_list())]
     base, out, _, _ = CE_MODELS[model]
-    bs = 256 if model == "small" else 128
+    bs = 256 if model == "small" else 128  # base models
     lr = 3e-5 if model == "small" else 2e-5
     train_crossencoder(a, b, c["y"].to_numpy(), str(out), batch_size=bs, lr=lr, base=base)
 
@@ -51,14 +55,21 @@ def train(n_s1: int, model: str = "small", seed: int = 0):
 def score(split: str, model: str = "small"):
     d = split_dir(split)
     p = pl.read_parquet(d / "p1.parquet")  # s1_idx, tgt, tgt_idx, p1
-    p = p.filter(pl.col("p1") >= CE_MIN_P1)
-    print(f"[ce] scoring {len(p):,} {split} pairs", flush=True)
-    T = _texts(split)
-    a = [T[1][i] for i in p["s1_idx"].to_list()]
-    b = [T[k][j] for k, j in zip(p["tgt"].to_list(), p["tgt_idx"].to_list())]
+    p = p.filter(pl.col("p1") >= CE_MIN_P1).select("s1_idx", "tgt", "tgt_idx")
     _, path, col, fname = CE_MODELS[model]
-    ce = CrossEncoder.load(str(path)).predict(a, b, batch_size=1024 if model == "small" else 512)
-    p.select("s1_idx", "tgt", "tgt_idx").with_columns(pl.Series(col, ce)).write_parquet(d / fname)
+    old = None
+    if (d / fname).exists():  # incremental: only score pairs not scored before
+        old = pl.read_parquet(d / fname)
+        p = p.join(old.select("s1_idx", "tgt", "tgt_idx"), on=["s1_idx", "tgt", "tgt_idx"], how="anti")
+    print(f"[ce] scoring {len(p):,} new {split} pairs with {model}", flush=True)
+    if len(p):
+        T = _texts(split, TEXT_COL.get(model, "text"))
+        a = [T[1][i] for i in p["s1_idx"].to_list()]
+        b = [T[k][j] for k, j in zip(p["tgt"].to_list(), p["tgt_idx"].to_list())]
+        ce = CrossEncoder.load(str(path)).predict(a, b, batch_size=512 if "base" in model else 1024)
+        p = p.with_columns(pl.Series(col, ce))
+    out = pl.concat([old, p]) if old is not None else p
+    out.write_parquet(d / fname)
 
 
 if __name__ == "__main__":

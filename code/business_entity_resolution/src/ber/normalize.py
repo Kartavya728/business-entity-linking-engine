@@ -19,6 +19,8 @@ from multiprocessing import Pool
 
 from anyascii import anyascii
 
+from .admin_areas import canon_admin, region_codes
+
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 _DIGIT_ALPHA = re.compile(r"(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)")
 
@@ -85,7 +87,10 @@ _PHRASES = [
     (re.compile(r"\bpublic\s+limited\b"), " plc "),
     (re.compile(r"\bn\s*(?=\d)"), " no "),  # 'N°16' -> 'no 16' (not 'north')
 ]
-_DBA = re.compile(r"\b(?:doing business as|trading as|d\s*/?\s*b\s*/?\s*a|t\s*/\s*a|a\s*/?\s*k\s*/?\s*a)\b", re.I)
+_DBA = re.compile(r"\b(?:doing business as|trading as|formerly known as|formerly|d\s*/?\s*b\s*/?\s*a|"
+                  r"f\s*/?\s*k\s*/?\s*a|t\s*/\s*a|a\s*/?\s*k\s*/?\s*a)\b", re.I)
+# generator junk appended to names: '| www.site.com', '[www.site.com]', '(ID: 30420)'
+_JUNK = re.compile(r"\|?\s*\[?\s*www\.[^\s\]]*\]?|\(?\s*\bID\s*:\s*\d+\s*\)?", re.I)
 _PHONE = re.compile(r"\+?\d[\d\s\-]{6,}\d")
 _DOMAIN = re.compile(r"^\s*(?:https?://)?(?:www\.)?([a-z0-9][a-z0-9\-]*)\.(?:com|net|org|in|co|fr|biz|info|us|io)(?:\.[a-z]{2})?\s*$", re.I)
 
@@ -171,7 +176,7 @@ def norm_name(raw: str):
     DBA forms 'X doing business as Y' use Y as the main name and X as name_alt.
     Domain-style names ('ryfoods.com') are reduced to their stem.
     """
-    raw = _PHONE.sub(" ", raw or "")
+    raw = _PHONE.sub(" ", _JUNK.sub(" ", raw or "")).strip(" |")
     is_dom = 0
     m = _DOMAIN.match(raw)
     if m:
@@ -188,14 +193,18 @@ def norm_name(raw: str):
     return " ".join(toks), " ".join(core if core else toks), legal, alt, is_dom
 
 
+# address stopwords (FR/EN articles/prepositions); single letters are kept (block ids)
+ADDR_STOP = set("de la le les du des of the et au aux en".split())
+
+
 def norm_addr(raw: str):
-    s = base(raw)
+    s = region_codes(base(canon_admin(raw)))
     for pat, rep in _PHRASES:
         s = pat.sub(rep, s)
     for pat, rep in _STATE_PHRASES:
         s = pat.sub(rep, s)
     s = _DIGIT_ALPHA.sub(" ", s)  # '12b' -> '12 b', 'sector5' -> 'sector 5'
-    toks = [ADDR_MAP.get(t, t) for t in s.split()]
+    toks = [ADDR_MAP.get(t, t) for t in s.split() if t not in ADDR_STOP]
     nums = [t for t in toks if t.isdigit()]
     zips = [t for t in nums if len(t) >= 5]
     return " ".join(toks), " ".join(nums), (zips[-1] if zips else "")

@@ -116,3 +116,22 @@ def topk_to_frame(idx: np.ndarray, score: np.ndarray, name: str, q_is_s1: bool =
     a, b = (q[m], d[m]) if q_is_s1 else (d[m], q[m])
     return pl.DataFrame({"s1_idx": a, "tgt_idx": b,
                          f"{name}_s": score.ravel()[m], f"{name}_r": r[m]})
+
+
+def token_doc_v2(df: pl.DataFrame) -> list:
+    """Typed sparse tokens (v5 blocking): filler-free name + skeleton, address tokens,
+    and 'house number x address word' keys (e.g. hs:33_prevert) that pin a specific
+    street address. IDF (fitted per country) down-weights generic words automatically."""
+    names = df["name_f"].to_list(); sk = df["name_fk"].to_list()
+    addr = df["addr_n"].to_list(); nums = df["nums"].to_list()
+    out = []
+    for n, k, a, m in zip(names, sk, addr, nums):
+        at = [t for t in a.split() if not t.isdigit()]
+        hn = m.split()[:1]
+        toks = [f"n:{t}" for t in n.split()] + [f"k:{t}" for t in k.split()] + [f"a:{t}" for t in at]
+        toks += [f"d:{t.lstrip('0') or '0'}" for t in m.split()]
+        if hn:
+            h = hn[0].lstrip("0") or "0"
+            toks += [f"hs:{h}_{t}" for t in at if len(t) >= 3]
+        out.append(" ".join(toks))
+    return out

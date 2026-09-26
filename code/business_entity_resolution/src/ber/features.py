@@ -19,7 +19,19 @@ from rapidfuzz.distance import JaroWinkler, Levenshtein
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 STR_COLS = ["name_n", "name_c", "name_k", "name_alt", "addr_n", "nums", "zip", "legal",
-            "is_dom", "country", "business_name"]
+            "is_dom", "country", "business_name", "name_f", "name_fk"]
+
+
+def _extra(p: str, q: str):
+    """(# S1 skeleton tokens absent from target, # target tokens absent from S1, # shared),
+    with a small edit tolerance so typos do not count as missing identity words."""
+    a, b = p.split(), q.split()
+    sb, sa = set(b), set(a)
+    def has(t, S):
+        return t in S or (len(t) >= 3 and any(Levenshtein.distance(t, u) <= 1 for u in S))
+    m1 = sum(1 for t in sa if not has(t, sb))
+    m2 = sum(1 for t in sb if not has(t, sa))
+    return m1, m2, len(sa & sb)
 
 
 def _cp(a, b, scorer, **kw):
@@ -94,6 +106,7 @@ class TfidfBank:
     (unsupervised, no labels). pair_cos() gives cosine for aligned (s1_idx, tgt_idx) pairs.
     """
     SPECS = {"n_idf": ("name_c", str.split, {}), "n_c3": ("name_c", None, {}),
+             "nx_idf": ("name_f", str.split, {}),
              "a_idf": ("addr_n", str.split, {}), "a_c3": ("addr_n", None, {"min_df": 2})}
 
     def __init__(self, s1: pl.DataFrame, tg: pl.DataFrame, n_jobs: int = 8):
@@ -179,6 +192,19 @@ def pair_features(cand: pl.DataFrame, s1: pl.DataFrame, tg: pl.DataFrame, bank: 
     F["n_first_eq"] = np.fromiter(((x.split()[:1] == y.split()[:1]) for x, y in zip(n1, n2)), np.float32, len(n1))
     F["n_len1"] = np.fromiter((len(x) for x in n1), np.float32, len(n1))
     F["n_len2"] = np.fromiter((len(x) for x in n2), np.float32, len(n2))
+    # filler-free core names (data-driven fillers, see fillers.py)
+    x1, x2 = g(A, "name_f", a), g(B, "name_f", b)
+    F["nx_ratio"] = _cp(x1, x2, fuzz.ratio)
+    F["nx_tset"] = _cp(x1, x2, fuzz.token_set_ratio)
+    F["nx_tsort"] = _cp(x1, x2, fuzz.token_sort_ratio)
+    F["nx_jw"] = _cp(x1, x2, JaroWinkler.normalized_similarity)
+    F["nx_exact"] = (x1 == x2).astype(np.float32)
+    xk1, xk2 = g(A, "name_fk", a), g(B, "name_fk", b)
+    F["nxk_ratio"] = _cp(xk1, xk2, fuzz.ratio)
+    F["nxk_exact"] = (xk1 == xk2).astype(np.float32)
+    with Pool(n_proc) as pool:
+        ex = np.asarray(pool.starmap(_extra, zip(xk1, xk2), chunksize=50000), dtype=np.float32)
+    F["nx_miss1"], F["nx_miss2"], F["nx_common"] = ex[:, 0], ex[:, 1], ex[:, 2]
     # legal forms
     l1, l2 = g(A, "legal", a), g(B, "legal", b)
     both = (l1 != "") & (l2 != "")

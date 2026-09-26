@@ -39,7 +39,14 @@ def main(skip_ce: bool):
         from .train_ce import score
         score("test")
     feat = stage2_frame("test")
-    feat = feat.with_columns(pl.Series("p2", predict_stage(feat, "stage2")))
+    cfg = json.load(open(MODEL_DIR / "decision.json"))
+    blend = cfg.get("blend", "xgb")
+    p2 = predict_stage(feat, "stage2") if blend in ("xgb", "avg") else None
+    if blend in ("lgb", "avg"):
+        from .ranker import predict_stage_lgb
+        pl_ = predict_stage_lgb(feat, "stage2lgb")
+        p2 = pl_ if p2 is None else 0.5 * (p2 + pl_)
+    feat = feat.with_columns(pl.Series("p2", p2))
     feat.select("s1_idx", "tgt", "tgt_idx", "p1", "p2").filter(pl.col("p2") > 0.01).write_parquet(d / "p2.parquet")
     cfg = json.load(open(MODEL_DIR / "decision.json"))
     sel = decide(feat.select("s1_idx", "tgt", "tgt_idx", "p2"), cfg)
