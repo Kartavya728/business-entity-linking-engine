@@ -9,5 +9,5 @@ cd "$ROOT"
 OUT="${TEAM}_submission.zip"
 rm -f "$OUT"
 zip -r -q "$OUT" output/matching_results.tsv output/candidate_pairs.tsv Documentation_template.md \
-    code/business_entity_resolution -x "*/__pycache__/*" "*.pyc"
+    code/business_entity_resolution -x "*/__pycache__/*" "*.pyc" "*/.venv/*"
 ls -la "$OUT"

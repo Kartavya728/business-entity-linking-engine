@@ -1,0 +1,15 @@
+{
+ "out": "../../../submissions/v9b_fr_labelshift_em",
+ "default": "p2_v8.parquet",
+ "default_cfg": "decision_v8.json",
+ "country": "France",
+ "src": "p2_v6.parquet",
+ "src_cfg": "decision_v6.json",
+ "src2": "",
+ "w2": 0.5,
+ "odds": 1.0,
+ "em": true,
+ "floor": null,
+ "empty_bias": null,
+ "empty": false
+}

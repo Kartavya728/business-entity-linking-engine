@@ -1,0 +1,4 @@
+v9b = v9a with a label-shift correction for France: French match odds x0.817, estimated label-free by
+EM prior re-estimation (Saerens et al. 2002) against the training prior (0.7916). France: 4,331 S1 changed,
+-4,382 matches vs v9a. US/India identical to v9a.
+Validator PASS. LB = (fill in)

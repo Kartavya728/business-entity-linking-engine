@@ -8,7 +8,10 @@ joblib==1.4.2
 torch==2.11.0
 transformers==5.8.0
 xgboost==3.4.1
+lightgbm==4.7.0
 rapidfuzz==3.14.6
 anyascii==0.3.3
 sparse_dot_topn==1.2.0
-sentencepiece
+sentencepiece==0.2.2
+huggingface_hub==1.14.0
+peft==0.21.0

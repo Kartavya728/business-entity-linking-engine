@@ -1,0 +1,3 @@
+v8_frblend = US/India from v8 + France = mean of v6 and v8 French probabilities (v6 decision rule).
+France: 9,443 S1 changed vs v9a, +1,995 matches. Built by scripts/make_variants.sh v8 v6.
+Validator PASS. LB = (fill in)

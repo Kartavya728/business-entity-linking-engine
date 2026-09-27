@@ -1,0 +1,4 @@
+v9a = US/India from v8 (best validation 0.99077) + France from v6 (best France so far).
+LB(v9a) - LB(v6) measures the v8 US/India gain; LB(v8) - LB(v9a) measures the v8 France change.
+Built: python -m ber.combine --default p2_v8.parquet --default-cfg decision_v8.json --country France --src p2_v6.parquet --src-cfg decision_v6.json
+Validator PASS. LB = (fill in)

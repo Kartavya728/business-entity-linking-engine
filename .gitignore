@@ -9,3 +9,5 @@ submissions/*/matching_results.tsv
 *.parquet
 *.safetensors
 *.pt
+# small portable reference predictions (France, keyed by entity ids) used to build hybrid variants
+!code/business_entity_resolution/reference/*.parquet

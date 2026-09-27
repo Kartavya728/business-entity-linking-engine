@@ -1,0 +1,3 @@
+v9c = v9a with a stronger French label-shift correction (odds x0.4): France 18,478 S1 changed,
+-19,341 matches vs v9a. Brackets the EM estimate so the LB response curve for France can be read.
+Validator PASS. LB = (fill in)

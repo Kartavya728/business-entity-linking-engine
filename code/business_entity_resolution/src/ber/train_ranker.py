@@ -7,6 +7,7 @@ pass), so every pair sees its true competitors. Training/evaluation rows are the
 S1 entities (random 500K of the ranker folds); OOF predictions give the validation score.
 """
 import argparse
+import os
 import itertools
 import json
 import time
@@ -17,11 +18,11 @@ import polars as pl
 from .config import split_dir
 from .decide import exclusive, score, select_expected_f, select_threshold
 from .features import group_context
-import os
 
 from .ranker import MODEL_DIR, feat_cols, fit_stage, fit_stage_lgb, stage2_context, subset_cv
 
 N_CV = 4
+S2_MIN_P1 = float(os.environ.get("BER_S2_MIN_P1", "0.0005"))
 
 
 def tune(oof: pl.DataFrame, gt: pl.DataFrame, universe: np.ndarray, p: str = "p2"):
@@ -58,10 +59,14 @@ def stage2_frame(split: str) -> pl.DataFrame:
     """p1 table (+ CE) with competition context over all candidates of the split."""
     d = split_dir(split)
     df = pl.read_parquet(d / "p1.parquet")
-    for fname, col, pref in (("ce.parquet", "ce", "cectx"), ("ce_b.parquet", "ceb", "cebctx"),
-                             ("ce_b2.parquet", "ceb2", "ceb2ctx"), ("ce_c.parquet", "cec", "cecctx"),
-                             ("ce_l.parquet", "cel", "celctx"), ("ce_md.parquet", "cemd", "cemdctx")):
-        if (d / fname).exists():
+    # stage 2 only re-ranks pairs stage 1 considers possible (same rule for train and test);
+    # rows below never reach the decision floor and dominated RAM (100M train rows -> 16M)
+    df = df.filter(pl.col("p1") >= S2_MIN_P1)
+    from .ce_registry import CE_MODELS
+    skip = set(os.environ.get("BER_CE_SKIP", "qwen05,qwen05_lora").split(","))  # e.g. BER_CE_SKIP=large2,bgem3
+    for name, m in CE_MODELS.items():  # every cross-encoder whose score file exists
+        fname, col, pref = m["file"], m["col"], m["col"] + "ctx"
+        if name not in skip and (d / fname).exists():
             df = df.join(pl.read_parquet(d / fname), on=["s1_idx", "tgt", "tgt_idx"], how="left")
             df = group_context(df.with_columns(pl.col(col).fill_null(-1.0)), col, pref)
     df = stage2_context(df, "p1")

@@ -1,0 +1,4 @@
+DIAGNOSTIC PROBE (expected LB ~0.85): US/India from v8, France predicted empty.
+LB = 0.8502*A_usindia + 0.1498*s_fr (s_fr = French singleton rate ~0.05). Gives the true US/India LB level
+and, with v9a, the true French F: F_fr = s_fr + (LB(v9a) - LB(probe)) / 0.1498.
+Validator PASS. LB = (fill in)

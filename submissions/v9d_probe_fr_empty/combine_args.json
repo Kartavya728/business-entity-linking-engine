@@ -1,0 +1,15 @@
+{
+ "out": "../../../submissions/v9d_probe_fr_empty",
+ "default": "p2_v8.parquet",
+ "default_cfg": "decision_v8.json",
+ "country": "France",
+ "src": "p2.parquet",
+ "src_cfg": "",
+ "src2": "",
+ "w2": 0.5,
+ "odds": 1.0,
+ "em": false,
+ "floor": null,
+ "empty_bias": null,
+ "empty": true
+}

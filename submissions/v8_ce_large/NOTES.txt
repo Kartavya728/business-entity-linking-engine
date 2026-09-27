@@ -1,0 +1,6 @@
+v8 = v6 + French address locale fix + large field-structured cross-encoder (multilingual-e5-large,
+raw || canonical input, sparse hard negatives, side-swap augmentation) + word-difference features
++ stage 2 restricted to p1 >= 0.0005 rows (train and test).
+Stage-2 OOF (US/India) 0.99077 vs 0.99023 for v6. Decision: ef, excl, floor 0.5, empty_bias 1.3, avg blend.
+vs v6: France 19,894 S1 changed (+8,800 matches), India 9,859 (+1,228), US 8,179 (+873).
+Validator: PASS (--check-ids). LB = (fill in)
