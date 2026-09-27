@@ -18,6 +18,11 @@ from .normalize import skeleton
 
 RATIO = 1.8
 MIN_FREQ = 0.001
+# Countries without training labels (France) also get 'excess' fillers: tokens whose target
+# frequency exceeds the S1 frequency times the typical copy shrinkage by EXCESS. This catches
+# generator fillers that are also common base-name words ('France', 'Fils', 'Services'),
+# which the ratio rule misses because their S1 frequency is already high.
+EXCESS = 0.004
 
 
 def _doc_freq(df: pl.DataFrame) -> pl.DataFrame:
@@ -27,8 +32,19 @@ def _doc_freq(df: pl.DataFrame) -> pl.DataFrame:
               .group_by("t").len("c").with_columns((pl.col("c") / n).alias("f")).drop("c"))
 
 
-def filler_sets(frames: dict) -> dict:
-    """frames: {'source1': df, 'source2': df, 'source3': df} -> {country: set(tokens)}"""
+def _excess(s1: pl.DataFrame, tg: pl.DataFrame) -> set:
+    a = _doc_freq(s1.select(pl.col("name_c").alias("name_n"))).rename({"f": "f1"})
+    b = _doc_freq(tg.select(pl.col("name_c").alias("name_n"))).rename({"f": "f2"})
+    r = a.join(b, on="t", how="full", coalesce=True).fill_null(1e-6)
+    top = r.filter(pl.col("f1") > 0.005)
+    shrink = float(np.median((top["f2"] / top["f1"]).to_numpy()))
+    r = r.filter((pl.col("f2") - shrink * pl.col("f1") >= EXCESS) & (pl.col("f2") / pl.col("f1") >= 1.15))
+    return set(r["t"].to_list())
+
+
+def filler_sets(frames: dict, unseen=()) -> dict:
+    """frames: {'source1': df, 'source2': df, 'source3': df} -> {country: set(tokens)}
+    unseen: countries absent from training, which also get excess fillers."""
     out = {}
     latin = pl.col("business_name").str.contains(r"^[\x00-\x7FÀ-ɏ\s]*$")
     countries = set(frames["source1"]["country"].unique().to_list())
@@ -42,6 +58,12 @@ def filler_sets(frames: dict) -> dict:
         out[c] = set(r["t"].to_list())
         print(f"[fillers] {c}: {len(out[c])} filler tokens, e.g. "
               f"{sorted(out[c], key=lambda t: -r.filter(pl.col('t') == t)['f2'][0])[:15]}", flush=True)
+        if c in unseen:
+            tgc = pl.concat([frames[k].filter((pl.col("country") == c) & latin).select("name_c")
+                             for k in ("source2", "source3")])
+            extra = _excess(s1, tgc) - out[c]
+            out[c] |= extra
+            print(f"[fillers] {c}: +{len(extra)} excess fillers {sorted(extra)}", flush=True)
     return out
 
 

@@ -150,7 +150,8 @@ Training S1 entities are split into 10 random folds (`splits.py`):
 | v5 stage 1 only (hybrid blocking, new features, 800K entities; log loss 0.0097 → 0.0081) | 0.98496 |
 | Stage 2 + e5-small cross-encoder (v1) | 0.98837 |
 | Stage 2 + e5-small + e5-base cross-encoders (v2) | **0.98964** |
-| v5 (hybrid blocking + all fixes + 3 CEs + XGB/LGB) | *running* |
+| v5 stage 2, XGBoost only / LightGBM only | 0.99017 / 0.99016 |
+| **v5 stage 2, XGBoost + LightGBM average (final)** | **0.99023** |
 
 Error analysis (v1, 500K entities): 5.4K false-positive pairs, 49.1K missed pairs (3.3K lost in
 blocking, 45.8K rejected by the model); most misses are targets with an empty address and a name
@@ -164,7 +165,11 @@ variant.
 | `v3_france_admin_fix` | v2 models + French région/département fix on test | **0.982202** |
 | `v3F1_france_admin_fix_stage1` | same, but France decided by stage 1 only | 0.978903 |
 
+| `v5_hybrid_blocking` | hybrid blocking + all France fixes + 3 CEs + XGB/LGB | *pending* |
+
 (v2 itself was not uploaded; v3 = v2 + the admin fix.) Reference points: #1 0.988419, #30 ≈ 0.9847.
+v5 vs v3 on test: 15.5% of French entities changed (32.1K pairs removed, 12.3K added), about 1.4% of
+US/India entities changed; predicted French empty rate rose from 4.9% to 5.4% (US/India 5.7%).
 
 ### 4.3 Why the leaderboard is lower than validation (diagnosis)
 

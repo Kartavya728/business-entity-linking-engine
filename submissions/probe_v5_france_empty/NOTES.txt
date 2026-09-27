@@ -1,0 +1,1 @@
+DIAGNOSTIC PROBE: v5 with all France rows empty (US/India identical to v5). Score difference vs v5 isolates France.

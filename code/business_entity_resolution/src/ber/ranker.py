@@ -20,7 +20,10 @@ import xgboost as xgb
 from .config import WORK_DIR
 from .features import group_context
 
+import os
+
 KEYS = ["s1_idx", "tgt", "tgt_idx"]
+DEVICE = os.environ.get("BER_DEVICE", "cuda")  # 'cpu' to predict while the GPU is busy
 NON_FEATS = set(KEYS) | {"y", "cv", "fold", "p1", "p2"}
 MODEL_DIR = WORK_DIR / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -106,7 +109,7 @@ def predict_stage(df: pl.DataFrame, name: str, chunk: int = 5_000_000) -> np.nda
     models = []
     for k in range(meta["n_cv"]):
         m = xgb.Booster(); m.load_model(MODEL_DIR / f"{name}_cv{k}.json")
-        m.set_param({"device": "cuda"})
+        m.set_param({"device": DEVICE})
         models.append(m)
     out = np.zeros(len(df), dtype=np.float32)
     for s in range(0, len(df), chunk):

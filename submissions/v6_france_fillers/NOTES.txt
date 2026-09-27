@@ -1,0 +1,3 @@
+v6 = v5 + France-only excess filler detection ('france', 'sons' (Fils), 'svc' (Services) added as fillers).
+US/India match sets identical to v5 (only id order within lists differs). France: 13,669 S1 changed, +12,028 matches.
+Validator: PASS (--check-ids). LB = (fill in)

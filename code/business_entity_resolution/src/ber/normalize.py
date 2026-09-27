@@ -238,6 +238,26 @@ def skeleton(s: str) -> str:
     return " ".join(skeleton_token(t) for t in s.split())
 
 
+# French address locale, applied to French records only (the training countries keep their own
+# conventions, e.g. Indian '1st cross' or 'kh no 570'). Found by comparing token frequencies of
+# French S1 vs S2/S3 addresses: targets write 'N° 13', 'Crs', 'Q.', 'Psg', '28 B' where S1 writes
+# '13', 'Cours', 'Quai', 'Passage', '28 Bis'.
+FR_ADDR_MAP = {"cross": "cours", "crs": "cours", "q": "quai", "psg": "passage", "pass": "passage",
+               "appartement": "apt", "appt": "apt", "app": "apt", "etage": "fl", "etg": "fl"}
+FR_COUNTRIES = {"France"}
+
+
+def fr_addr(addr_n: str) -> str:
+    toks, out = addr_n.split(), []
+    for i, t in enumerate(toks):
+        if t == "no" and i + 1 < len(toks) and toks[i + 1].isdigit():
+            continue  # house-number marker 'N° 13'
+        if t in ("b", "t") and out and out[-1].isdigit():
+            t = "bis" if t == "b" else "ter"  # '28 B' -> '28 bis'
+        out.append(FR_ADDR_MAP.get(t, t))
+    return " ".join(out)
+
+
 def _norm_row(args):
     name, addr = args
     nn, nc, legal, alt, dom = norm_name(name)
@@ -253,4 +273,10 @@ def normalize_frame(df, n_proc: int = 40):
         res = pool.map(_norm_row, rows, chunksize=20000)
     names = ["name_n", "name_c", "addr_n", "nums", "zip", "name_k", "legal", "name_alt", "is_dom"]
     cols = list(zip(*res)) if res else [[]] * len(names)
-    return df.with_columns(pl.Series(n, list(c), dtype=pl.Utf8) for n, c in zip(names, cols))
+    cols = [list(c) for c in cols]
+    if "country" in df.columns:  # locale-specific address conventions
+        ai = names.index("addr_n")
+        for i, c in enumerate(df["country"].to_list()):
+            if c in FR_COUNTRIES:
+                cols[ai][i] = fr_addr(cols[ai][i])
+    return df.with_columns(pl.Series(n, c, dtype=pl.Utf8) for n, c in zip(names, cols))

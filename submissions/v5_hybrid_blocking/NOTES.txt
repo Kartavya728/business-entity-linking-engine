@@ -1,0 +1,4 @@
+v5 2026-09-26 15:28 IST
+OOF macro F0.5 (800K train S1): 0.99023 (v2 0.98964)
+hybrid blocking dense<20|sparse<5|rev0 (45.97 cand/S1 test), French admin codes + address stopwords, data-driven fillers, fka/www/ID cleaning, 3 cross-encoders, stage-2 XGB+LGB average
+validator PASS with --check-ids

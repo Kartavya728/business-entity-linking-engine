@@ -1,0 +1,4 @@
+v6b = v6 + France same-address boost: pairs with identical normalised address and filler-free name
+token-set >= 80 get p2 -> 0.9 + 0.1*p2 (python -m ber.variants --country France --boost 0.9).
+US/India match sets identical to v5. France: 19,258 S1 changed vs v5, +18,033 matches.
+Validator: PASS (--check-ids). LB = (fill in)

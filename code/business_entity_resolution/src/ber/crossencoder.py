@@ -35,8 +35,8 @@ class CrossEncoder(torch.nn.Module):
         torch.save(self.head.state_dict(), f"{path}/head.pt")
 
     @classmethod
-    def load(cls, path):
-        m = cls(path)
+    def load(cls, path, max_len: int = 128):
+        m = cls(path, max_len=max_len)
         m.head.load_state_dict(torch.load(f"{path}/head.pt"))
         return m
 
@@ -58,10 +58,11 @@ class CrossEncoder(torch.nn.Module):
 
 
 def train_crossencoder(a, b, y, out_path, epochs: int = 1, batch_size: int = 256, lr: float = 3e-5,
-                       seed: int = 42, base: str = CE_BASE):
+                       seed: int = 42, base: str = CE_BASE, swap: bool = False, max_len: int = 128):
+    """swap: randomly present the pair as (target, S1) - the match relation is symmetric."""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
-    model = CrossEncoder(base).cuda().train()
+    model = CrossEncoder(base, max_len=max_len).cuda().train()
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     n = len(a); steps = epochs * (n // batch_size); warm = max(1, int(0.05 * steps))
     sched = torch.optim.lr_scheduler.LambdaLR(
@@ -72,7 +73,12 @@ def train_crossencoder(a, b, y, out_path, epochs: int = 1, batch_size: int = 256
         perm = rng.permutation(n)
         for s in range(0, n - batch_size + 1, batch_size):
             idx = perm[s:s + batch_size]
-            t = model.batch([a[i] for i in idx], [b[i] for i in idx])
+            if swap:
+                flip = rng.random(len(idx)) < 0.5
+                t = model.batch([b[i] if f else a[i] for i, f in zip(idx, flip)],
+                                [a[i] if f else b[i] for i, f in zip(idx, flip)])
+            else:
+                t = model.batch([a[i] for i in idx], [b[i] for i in idx])
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 lo = model(t["input_ids"].cuda(), t["attention_mask"].cuda())
             loss = F.binary_cross_entropy_with_logits(lo.float(), torch.from_numpy(y[idx]).cuda())

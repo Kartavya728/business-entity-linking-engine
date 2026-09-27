@@ -59,11 +59,16 @@ def stage2_frame(split: str) -> pl.DataFrame:
     d = split_dir(split)
     df = pl.read_parquet(d / "p1.parquet")
     for fname, col, pref in (("ce.parquet", "ce", "cectx"), ("ce_b.parquet", "ceb", "cebctx"),
-                             ("ce_b2.parquet", "ceb2", "ceb2ctx"), ("ce_c.parquet", "cec", "cecctx")):
+                             ("ce_b2.parquet", "ceb2", "ceb2ctx"), ("ce_c.parquet", "cec", "cecctx"),
+                             ("ce_l.parquet", "cel", "celctx"), ("ce_md.parquet", "cemd", "cemdctx")):
         if (d / fname).exists():
             df = df.join(pl.read_parquet(d / fname), on=["s1_idx", "tgt", "tgt_idx"], how="left")
             df = group_context(df.with_columns(pl.col(col).fill_null(-1.0)), col, pref)
-    return stage2_context(df, "p1")
+    df = stage2_context(df, "p1")
+    if os.environ.get("BER_DT") == "1" and split == "test":  # word-difference features (see adapt.py)
+        from .adapt import diff_token_feats
+        df = diff_token_feats(df, split, procs=12)
+    return df
 
 
 def stage2():
@@ -73,6 +78,9 @@ def stage2():
     df = df.with_columns(pl.Series("cv", subset_cv(df["s1_idx"].to_numpy(), d, N_CV))).filter(pl.col("cv") >= 0)
     gt = pl.read_parquet(d / "gt.parquet").with_columns(pl.lit(1, pl.Int8).alias("y"))
     df = df.join(gt, on=["s1_idx", "tgt", "tgt_idx"], how="left").with_columns(pl.col("y").fill_null(0))
+    if os.environ.get("BER_DT") == "1":  # after the subset filter: only training rows need them
+        from .adapt import diff_token_feats
+        df = diff_token_feats(df, "train", procs=12)
     print(f"[train] stage-2 frame {df.shape} in {time.time() - t:.0f}s", flush=True)
     cols2 = feat_cols(df) + ["p1"]
     px = fit_stage(df, "stage2", cols2, N_CV)
