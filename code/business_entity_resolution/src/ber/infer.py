@@ -54,8 +54,9 @@ def main(skip_ce: bool):
     s1_ids = pl.read_parquet(d / "source1.parquet", columns=["entity_id"])["entity_id"].to_numpy()
     tgt_ids = {k: pl.read_parquet(d / f"source{k}.parquet", columns=["entity_id"])["entity_id"].to_numpy()
                for k in (2, 3)}
-    cand = pl.read_parquet(d / "candidates.parquet", columns=["s1_idx", "tgt", "tgt_idx", "dense_s"])
-    write_id_lists(OUT_DIR / "candidate_pairs.tsv", s1_ids, id_lists(cand, len(s1_ids), tgt_ids, "dense_s"),
+    # candidate_pairs.tsv = exactly the pairs the final model scored (stage-2 input, p1 >= CAND_MIN_P1)
+    cand = feat.select("s1_idx", "tgt", "tgt_idx", "p1")
+    write_id_lists(OUT_DIR / "candidate_pairs.tsv", s1_ids, id_lists(cand, len(s1_ids), tgt_ids, "p1"),
                    ("source1_entity_id", "candidate_entity_ids"))
     write_id_lists(OUT_DIR / "matching_results.tsv", s1_ids, id_lists(sel, len(s1_ids), tgt_ids, "p2"),
                    ("source1_entity_id", "matched_entity_ids"))

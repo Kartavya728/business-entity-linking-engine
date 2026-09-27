@@ -9,6 +9,11 @@ WORK_DIR = Path(os.environ.get("BER_WORK", ROOT / "work"))
 OUT_DIR = Path(os.environ.get("BER_OUT", ROOT / "output"))
 
 SEED = 42
+# Final candidate set: blocking pairs whose stage-1 probability p1 reaches this value. Stage 2 (with
+# the cross-encoders and LLM matchers) scores exactly these pairs, and candidate_pairs.tsv lists them.
+# 0.01 keeps 4.7 candidates per S1 on test (6.4 at 0.001) at 99.60% train pair recall; v8 accepted
+# only 440 of 5.9M test matches below it. BER_S2_MIN_P1 is the former name of the setting.
+CAND_MIN_P1 = float(os.environ.get("BER_CAND_MIN_P1", os.environ.get("BER_S2_MIN_P1", "0.01")))
 SOURCES = ("source1", "source2", "source3")
 TARGETS = ("source2", "source3")
 

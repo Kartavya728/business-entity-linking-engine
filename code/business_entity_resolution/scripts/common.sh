@@ -8,14 +8,18 @@ export BER_DATA="${BER_DATA:-$BER_ROOT/dataset}"
 export BER_WORK="${BER_WORK:-$BER_ROOT/work}"
 export BER_OUT="${BER_OUT:-$BER_ROOT/output}"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-PY="${PY:-$PKG/.venv/bin/python}"
+PY="${PY:-$HOME/miniconda3/envs/${BER_ENV:-ber}/bin/python}"   # conda env from setup_env.sh
 [ -x "$PY" ] || PY="$(command -v python3)"
 SRC="$PKG/src"
 LOG="$BER_WORK/logs"
 mkdir -p "$LOG" "$BER_WORK/models" "$BER_OUT"
-NGPU="${NGPU:-$(nvidia-smi -L 2>/dev/null | wc -l)}"
+# inside a SLURM job use exactly the allocated devices (MIG UUIDs on a MIG slice, where
+# nvidia-smi -L also lists the parent GPU and would count two)
+CVD="${CUDA_VISIBLE_DEVICES:-}"
+[ -n "${GPUS:-}" ] || GPUS="${CVD//,/ }"
+NGPU="${NGPU:-$(nvidia-smi -L 2>/dev/null | grep -c '^GPU' || true)}"
 [ "$NGPU" -ge 1 ] 2>/dev/null || NGPU=1
-GPUS=(${GPUS:-$(seq -s ' ' 0 $((NGPU - 1)))})    # physical GPU ids to use, e.g. GPUS="0 1 2 3"
+GPUS=(${GPUS:-$(seq -s ' ' 0 $((NGPU - 1)))})    # GPU ids or UUIDs to use, e.g. GPUS="0 1 2 3"
 NGPU=${#GPUS[@]}
 
 step() { echo "$(date '+%F %T') $*" | tee -a "$LOG/progress.txt"; }

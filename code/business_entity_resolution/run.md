@@ -53,37 +53,59 @@ mkdir -p dataset/train dataset/test     # then put the 7 competition TSVs there 
 
 Then run `scripts/run_pipeline.sh`, which rebuilds everything (section 4).
 
-## 1. Environment (once, on the DGX)
+## 1. Environment (once, on the DGX login node)
 
 ```bash
 cd ~/business-entity-linking-engine/code/business_entity_resolution
-bash scripts/setup_env.sh      # venv + requirements + checkpoints (~40 GB incl. Qwen2.5-7B); PYBIN=python3.12 to choose
+nohup bash scripts/setup_env.sh > ../../work/logs/setup_env.log 2>&1 &   # conda env "ber" + checkpoints
 ```
 
-It ends by printing `torch ... cuda True gpus 1`. If CUDA is `False`, install the matching wheel
-(`.venv/bin/pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128`) and re-run.
+Run it on the **login node**, not through sbatch. The GPU node `dgx-b200` downloads from PyPI at
+~0.3 MB/s and from Hugging Face at ~10 MB/s, the login node at up to 58 and 33–39 MB/s (measured
+2026-09-27; PyPI's CDN is also throttled on the login node at times). `/home` is shared, so the env
+(`~/miniconda3/envs/ber`, `BER_ENV=<name>` for another name) and the Hugging Face cache are visible
+to every job. The training jobs print the CUDA check on the GPU.
 
-If the DGX uses SLURM, first get a GPU shell
-(`srun --gres=gpu:1 --cpus-per-task=32 --mem=200G --time=12:00:00 --pty bash`) or wrap the run commands
-in `sbatch`. Use `tmux` or `nohup` so a dropped SSH session does not stop the run.
+All GPU jobs run through SLURM on the `medium-b200` partition with one **MIG 3g.90gb slice**
+(90 GB VRAM, `--gres=gpu:nvidia_b200_3g.90gb:1`). Each QoS (`qos_medium`, `qos_small`, `qos_full`)
+allows at most 2 jobs / 2 GPUs per user; jobs on other partitions can also count against
+`qos_medium` (the default QoS).
 
-## 2. Run the LLM matchers on the single B200 (Route A)
+| Script | Wraps | Default resources |
+|---|---|---|
+| `scripts/setup_env.sh` | environment + checkpoints (login node) | – |
+| `scripts/slurm_experiments.sh` | `run_experiments.sh` | 24 CPU, 120 GB, 24 h |
+| `scripts/slurm_pipeline.sh` | `run_pipeline.sh` | 32 CPU, 200 GB, 24 h |
+
+Override any of them on the command line, e.g. `sbatch --time=12:00:00 scripts/slurm_experiments.sh`.
+Environment variables (`RUN`, `EXTRA_CE`, `START`, ...) pass through to the job. Useful commands:
+`squeue -u $USER`, `scancel <jobid>`, `tail -f work/logs/progress.txt`.
+
+## 2. Run the LLM matchers on one MIG slice (Route A)
 
 ```bash
 cd ~/business-entity-linking-engine/code/business_entity_resolution
-RUN=v11 EXTRA_CE="qwen25_7b qwen3_4b" nohup bash scripts/run_experiments.sh > ../../work/logs/v11.out 2>&1 &
+RUN=v11 EXTRA_CE="qwen3rr_4b" sbatch scripts/slurm_experiments.sh
 tail -f ../../work/logs/progress.txt
 ```
 
-On one GPU the models run one after another, and **stage 2 + variants are rebuilt after each model**:
+With several models (`EXTRA_CE="a b"`) they run one after another on one GPU, and **stage 2 + variants
+are rebuilt after each model**. v11 uses only the 4B reranker: the rules allow up to 8B parameters, and
+counted over the whole system (e5 bi-encoder + four e5 cross-encoders = 1.19B) Qwen2.5-7B would total 8.26B:
 
-| Step | Model | Estimated B200 time | Output |
+| Step | Model | Estimated full-B200 time | Output |
 |---|---|---|---|
-| 1 | `qwen25_7b`: Qwen2.5-7B (7.6B, Apache-2.0), LoRA r=16, hard-pair band | train ~0.5 h, score ~2–3 h, stage 2 ~20 min | `submissions/v11_1_*` |
-| 2 | `qwen3_4b`: Qwen3-4B-Base (4.0B, Apache-2.0), LoRA r=32, hard-pair band | train ~0.3 h, score ~1.5 h, stage 2 ~20 min | `submissions/v11_2_*` |
+| 1 | `qwen3rr_4b`: Qwen3-Reranker-4B (4.0B, Apache-2.0), LoRA r=32, native reranker template, hard-pair band | on a 3g.90gb slice: train 1.7 h (166K pairs, 2.4 s/step), score 3.4 h (3.9M pairs), stage 2 ~40 min | `submissions/v11_1_*` |
 
-The times are estimates (not measured on a B200). Check `work/logs/ce_train_<model>.log` and
-`ce_score_<model>_*.log` for real progress.
+Training speed was measured on the slice; the scoring time assumes the benchmarked ~320 pairs/s
+(merged LoRA, bf16). Lower `bs` / `score_bs` in `ce_registry.py` if a model runs out of memory
+(gradient checkpointing must stay on for the 4B at batch 64: without it training needs more than 89 GB). Check `work/logs/ce_train_<model>.log` and `ce_score_<model>_*.log` for real progress.
+
+Every LLM matcher asks a yes/no question ("Do records A and B describe the same business?", or the
+Qwen3-Reranker template), and its classification head starts as the LM's own `yes − no` answer
+logit (`yesno` in `ce_registry.py`), so fine-tuning starts from the model's multilingual judgement
+instead of a random head (France has no labels). Scoring writes its file every 1M pairs: a job
+stopped by the time limit resumes where it stopped when resubmitted (trained models are skipped).
 
 The **hard-pair band** (0.02 ≤ p1 < 0.995, the same rule on train and test) restricts the LLMs to the
 2.4M train / 2.2M test pairs where stage 1 is not already near-certain, instead of 12M / 9.5M.
@@ -125,7 +147,7 @@ other when their US/India rows are identical: each leaderboard difference is the
 To build a single variant by hand (from `src/`):
 
 ```bash
-../.venv/bin/python -m ber.combine --out ../../../submissions/X \
+~/miniconda3/envs/ber/bin/python -m ber.combine --out ../../../submissions/X \
     --default p2_v11_1.parquet --default-cfg decision_v11_1.json \
     --country France --src ../reference/p2_v6_france.parquet --src-cfg ../reference/decision_v6.json --odds 0.6
 ```
@@ -135,7 +157,8 @@ The other options are `--em`, `--empty`, and `--src2 FILE --w2 0.5` to blend.
 ## 4. Full reproduction (Route B, or to rebuild)
 
 ```bash
-bash scripts/run_pipeline.sh     # START=blocking|stage1|ce|stage2 resumes from that stage
+sbatch scripts/slurm_pipeline.sh            # full run
+START=ce sbatch scripts/slurm_pipeline.sh   # resume from prepare|biencoder|blocking|stage1|ce|stage2
 ```
 
 The stages run in order:
@@ -163,7 +186,7 @@ This writes:
 | `output/matching_results.tsv` | the chosen file |
 | `output/candidate_pairs.tsv` | the stage-1 filtered blocking output (p1 ≥ 0.001) plus every predicted match: 6.4 candidates per S1 instead of 46, 99.83% train recall |
 
-It validates both and zips them with `code/business_entity_resolution/` (without `.venv`) and
+It validates both and zips them with `code/business_entity_resolution/` and
 `Documentation_template.md`.
 
 ## Leaderboard history (for reading new results)

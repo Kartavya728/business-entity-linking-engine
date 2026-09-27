@@ -147,9 +147,10 @@ def predict_stage_oof(df: pl.DataFrame, name: str, d) -> np.ndarray:
     return out
 
 
+LGB_THREADS = int(os.environ.get("SLURM_CPUS_PER_TASK", "40"))  # never more threads than the job's CPUs
 LGB_PARAMS = dict(objective="binary", learning_rate=0.05, num_leaves=255, min_data_in_leaf=100,
                   feature_fraction=0.7, bagging_fraction=0.8, bagging_freq=1, lambda_l2=2.0,
-                  max_bin=255, num_threads=40, verbose=-1)
+                  max_bin=255, num_threads=LGB_THREADS, verbose=-1)
 
 
 def fit_stage_lgb(df: pl.DataFrame, name: str, cols, n_cv: int, rounds: int = 3000):
@@ -185,5 +186,5 @@ def predict_stage_lgb(df: pl.DataFrame, name: str, chunk: int = 5_000_000) -> np
     out = np.zeros(len(df), dtype=np.float32)
     for s in range(0, len(df), chunk):
         X = to_x(df.slice(s, chunk), meta["cols"])
-        out[s:s + chunk] = sum(m.predict(X, num_threads=40) for m in models) / len(models)
+        out[s:s + chunk] = sum(m.predict(X, num_threads=LGB_THREADS) for m in models) / len(models)
     return out

@@ -3,7 +3,7 @@
 # produced by run_pipeline.sh): train extra cross-encoders in parallel (one per GPU), score them
 # sharded over all GPUs, retrain stage 2 with every cross-encoder, infer, build variants.
 #
-# Usage: RUN=v10 EXTRA_CE="large2 bgem3 qwen15" bash scripts/run_experiments.sh
+# Usage: RUN=v11 EXTRA_CE="qwen3rr_4b" bash scripts/run_experiments.sh
 #   EXTRA_CE : cross-encoders to add, NAME[:N_S1[:EPOCHS]] (names in src/ber/ce_registry.py),
 #              e.g. EXTRA_CE="large2:250000 bgem3:250000:1 qwen15:100000"
 #   RUN      : tag for this run's outputs (p2_<RUN>.parquet, decision_<RUN>.json, submissions/<RUN>_*)
@@ -11,8 +11,8 @@
 #   GPUS     : physical GPU ids to use (default: all), e.g. GPUS="0 1 2 3"
 #   STAGE2_EACH : with one GPU (default 1) retrain stage 2 after every model -> <RUN>_1, <RUN>_2, ...
 source "$(dirname "$0")/common.sh"
-RUN=${RUN:-v10}
-EXTRA_CE=${EXTRA_CE:-qwen25_7b qwen3_4b large2}
+RUN=${RUN:-v11}
+EXTRA_CE=${EXTRA_CE:-qwen3rr_4b}
 REF=${REF:-v6}
 for f in train/p1.parquet test/p1.parquet train/candidates.parquet train/gt.parquet train/subset_s1.npy; do
   [ -f "$BER_WORK/$f" ] || { echo "missing $BER_WORK/$f - copy work/ first or run run_pipeline.sh" >&2; exit 1; }

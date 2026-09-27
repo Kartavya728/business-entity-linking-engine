@@ -127,7 +127,8 @@ entities whose links were lost in blocking included).
 | v1 encoder | e5-small, in-batch negatives, dense top-40 + CPU sparse | 99.935% (union, cap 60) | 120 |
 | v2 encoder | + **mined hard negatives** (top non-matches of the same S1) | 99.84% (cap 20) | 40.4 |
 | **v5 hybrid** | v2 dense top-20 ∪ **GPU IDF-sparse** top-5 ∪ reverse-best | **99.862%** | **45.4** |
-| final candidate file | hybrid ∩ stage-1 filter p1 ≥ 0.001, plus every predicted match | **99.833%** | **6.4** |
+| final candidate file (to v10) | hybrid ∩ stage-1 filter p1 ≥ 0.001, plus every predicted match | 99.833% | 6.4 |
+| **final candidate file (v11)** | hybrid ∩ stage-1 filter **p1 ≥ 0.01** = exactly the pairs stage 2 scores | **99.60%** (800K held-out S1, OOF p1) | **4.7** (test) |
 
 - **Bi-encoder** (`biencoder.py`): `intfloat/multilingual-e5-small` (MIT, 118M), symmetric InfoNCE,
   1 epoch on 2.29M E-fold pairs. A second round uses the top-3 mined hard negatives per source
@@ -139,8 +140,12 @@ entities whose links were lost in blocking included).
   skeletons, address tokens, house-number×street keys) recovers about 60% of that tail.
 - **Blocking misses checked:** every pair with identical filler-free name and address is in the
   candidate set, in every country.
-- **The final candidate file** keeps the pipeline's own stage-1 filter. It is 7× smaller than the
-  raw union for 0.03% recall (`package_candidates.py`).
+- **The final candidate file** keeps the pipeline's own stage-1 filter. Since v11 one threshold,
+  `config.CAND_MIN_P1 = 0.01`, defines the stage-2 input, the cross-encoder / LLM pairs and
+  `candidate_pairs.tsv`, as the rules require (the file is what the final model scores). It is
+  10× smaller than the raw union (4.7 vs 46 per S1 on test). The organisers rank smaller candidate
+  sets higher; v8 accepted only 440 of its 5.9M test matches below p1 = 0.01 (0.007%), so the
+  26% cut from 6.4 per S1 costs essentially no F0.5 (`package_candidates.py`).
 
 ### 3.4 Pair features (`features.py`, ~100 features)
 
@@ -177,13 +182,25 @@ entities whose links were lost in blocking included).
 | `large` | multilingual-e5-large (MIT, 560M) | **field-structured** raw ‖ canonical (Ditto-style), sparse hard negatives, side-swap augmentation | v8 |
 | `bgem3` | BGE-M3 (MIT, 568M) | field-structured | v10 (running) |
 | `large2` | e5-large, other seed, 250K entities | field-structured | DGX option |
-| `qwen25_7b` | **Qwen2.5-7B (Apache-2.0, 7.6B)**, LoRA r=16 | raw text, **hard-pair band** 0.02 ≤ p1 < 0.995 | DGX |
-| `qwen3_4b` | Qwen3-4B-Base (Apache-2.0, 4.0B), LoRA r=32 | raw text, hard-pair band | DGX |
+| `qwen25_7b` | **Qwen2.5-7B (Apache-2.0, 7.6B)**, LoRA r=16, yes/no head | raw text as a yes/no question, **hard-pair band** 0.02 ≤ p1 < 0.995 | option — not used: with the e5 models the system would total 8.26B |
+| `qwen3rr_4b` | **Qwen3-Reranker-4B (Apache-2.0, 4.0B)**, LoRA r=32, native yes/no head | raw text in the reranker's own template, hard-pair band | **v11** (DGX); system total 5.21B |
+| `qwen3_4b` | Qwen3-4B-Base (Apache-2.0, 4.0B), LoRA r=32, yes/no head | raw text as a yes/no question, hard-pair band | option |
 | `qwen15` | Qwen2.5-1.5B (Apache-2.0), full fine-tune | field-structured | option |
 | `mdeberta` | mDeBERTa-v3-base (MIT) | field-structured | **excluded**: diverges to NaN after the first update (transformers 5.8, bf16 and fp32) |
 
-  - **Decoder LLM matchers** get one prompt (`S1: … T: … same business?`), left padding and last-token
-    pooling. The large ones use LoRA adapters on a frozen bf16 backbone (peft, Apache-2.0).
+  - **Decoder LLM matchers** get one prompt per pair, left padding and last-token pooling. The large ones
+    use LoRA adapters on a frozen bf16 backbone (peft, Apache-2.0).
+  - **Yes/no head (v11).** The pair is asked as a question ("Do records A and B describe the same
+    business? Answer:", or the Qwen3-Reranker template), and the linear head starts as the LM-head
+    difference of the two answer tokens, so the untrained matcher already outputs the LLM's own
+    `logit(yes) − logit(no)` (checked equal to the full LM head to 1e-5). Fine-tuning starts from the
+    model's multilingual judgement instead of a random direction, which is what can carry over to
+    France (no labels). Zero-shot AUC on held-out hard-band pairs: 0.60 (Qwen2.5-7B base), 0.68
+    (Qwen3-Reranker-4B); stage 1 reaches 0.948 on the same pairs, so the gain has to come from training.
+  - **Throughput on one MIG 3g.90gb slice** (merged LoRA, bf16, SDPA): ~620 pairs/s for Qwen2.5-7B
+    (~63 tokens) and ~320 pairs/s for Qwen3-Reranker-4B (~132 tokens), both ~42K tokens/s. LoRA
+    training uses batch 64 (lr 2e-4): at batch 16 a step cost 1.1 s, mostly fixed overhead.
+    Scoring writes its file every 1M pairs, so a job stopped by the time limit resumes.
   - The **hard-pair band** limits them to the 2.4M train / 2.2M test pairs where stage 1 is not already
     near-certain, instead of 12M / 9.5M. The same rule applies to train and test, so the feature is
     consistent.
@@ -267,6 +284,21 @@ France is 14.98% of the S1 records, so a France-only change moves the leaderboar
     other-entity clusters.
   - Street-name disagreement is not elevated.
   - EM label shift gives k ≈ 0.8.
+  - **Filler list vs distractor words (v11 check).** The French filler set
+    (`grp developpement intl participations dist holding snc associes` + `france sons svc`) contains
+    words whose one-extra-word candidate pairs almost never keep the exact address: `intl` 0.014%,
+    `dist` 0.020%, `participations` 0.032%, `holding` 0.075%, against 25% for identical French names
+    and 21–24% for the real fillers `sons`, `associes`, `svc`. The test is validated on train, where
+    the same-address rate of a word tracks its match rate (correlation 0.85; `ent`, `traders`,
+    `ventures` ≈ 0% and 1% matches). Stage 2 already rejects these pairs, though: v8 accepts only
+    120 French pairs whose sole difference is one of the four words (117 of 259K entities), so this
+    is not the France gap. For the other filler words the same test splits v8's decisions (accepted
+    identical French names keep the address 34% of the time): `france` is separated well (accepted
+    25%, rejected 0.6%), but `grp` (Groupe) and `developpement` are inverted — rejected pairs keep the
+    address 30% / 21% of the time (mostly true copies), accepted ones 13% / 12%. `grp` is a pure
+    distractor word in training (0% matches in US and India), so the role learned there transfers
+    wrongly. Estimated cost ≈ 0.002 French F (≈3.7K missed and 1.2K false pairs): real, but a small
+    part of the gap.
 - **Fixed so far:** région codes and stopwords (v5), the IDF-sparse path (v5), excess fillers (v6),
   the French address locale (v8).
 - **Remaining levers:** stronger multilingual matchers (≤8B LLMs), the French decision strength

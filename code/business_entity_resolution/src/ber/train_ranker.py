@@ -15,14 +15,14 @@ import time
 import numpy as np
 import polars as pl
 
-from .config import split_dir
+from .config import CAND_MIN_P1, split_dir
 from .decide import exclusive, score, select_expected_f, select_threshold
 from .features import group_context
 
 from .ranker import MODEL_DIR, feat_cols, fit_stage, fit_stage_lgb, stage2_context, subset_cv
 
 N_CV = 4
-S2_MIN_P1 = float(os.environ.get("BER_S2_MIN_P1", "0.0005"))
+S2_MIN_P1 = CAND_MIN_P1  # stage 2 scores exactly the final candidate set
 
 
 def tune(oof: pl.DataFrame, gt: pl.DataFrame, universe: np.ndarray, p: str = "p2"):
@@ -59,11 +59,11 @@ def stage2_frame(split: str) -> pl.DataFrame:
     """p1 table (+ CE) with competition context over all candidates of the split."""
     d = split_dir(split)
     df = pl.read_parquet(d / "p1.parquet")
-    # stage 2 only re-ranks pairs stage 1 considers possible (same rule for train and test);
-    # rows below never reach the decision floor and dominated RAM (100M train rows -> 16M)
+    # stage 2 only re-ranks the final candidate set (same rule for train and test); rows below
+    # almost never reach the decision floor (config.CAND_MIN_P1) and dominated RAM
     df = df.filter(pl.col("p1") >= S2_MIN_P1)
     from .ce_registry import CE_MODELS
-    skip = set(os.environ.get("BER_CE_SKIP", "qwen05,qwen05_lora").split(","))  # e.g. BER_CE_SKIP=large2,bgem3
+    skip = set(os.environ.get("BER_CE_SKIP", "qwen05,qwen05_lora,qwen3rr_smoke").split(","))  # e.g. BER_CE_SKIP=large2,bgem3
     for name, m in CE_MODELS.items():  # every cross-encoder whose score file exists
         fname, col, pref = m["file"], m["col"], m["col"] + "ctx"
         if name not in skip and (d / fname).exists():

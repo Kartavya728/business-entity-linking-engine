@@ -1,8 +1,10 @@
-"""Final candidate set = stage-1 filtered blocking output (p1 >= P1_MIN) plus every predicted match.
+"""Final candidate set = stage-1 filtered blocking output (p1 >= config.CAND_MIN_P1, the pairs stage 2
+scores) plus every predicted match.
 
 The raw hybrid blocking keeps ~46 candidates per S1 (99.86% recall on train); the stage-1
-ranker's filter keeps ~6.4 per S1 at 99.83% recall. Stage 2 scores every blocking pair, so
-matches outside the filter are added back to keep matching_results a subset of candidates.
+ranker's filter at p1 >= 0.01 keeps ~4.7 per S1 on test at 99.60% train pair recall (6.4 per S1
+at 0.001). Stage 2 scores exactly these pairs; matches taken from another run (per-country
+hybrids) are added back so matching_results stays a subset of the candidates.
 
   python -m ber.package_candidates --matching submissions/<v>/matching_results.tsv --out output/candidate_pairs.tsv
 """
@@ -10,10 +12,10 @@ import argparse
 
 import polars as pl
 
-from .config import split_dir
+from .config import CAND_MIN_P1, split_dir
 from .io import write_id_lists
 
-P1_MIN = 0.001
+P1_MIN = CAND_MIN_P1
 
 
 def main(matching: str, out: str):
